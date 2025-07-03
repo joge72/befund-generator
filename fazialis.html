@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Elektroneurographischer Befund</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; max-width: 900px; }
+    label { display: block; margin: 10px 0 5px; }
+    input { width: 100px; }
+    textarea { width: 100%; height: 300px; margin-top: 20px; }
+    button { margin-top: 20px; padding: 10px 20px; }
+  </style>
+</head>
+<body>
+
+  <h2>Elektroneurographischer Befund-Generator</h2>
+
+  <label>Oris rechts (mV):</label>
+  <input type="number" id="orisRe" step="0.01">
+  
+  <label>Oris links (mV):</label>
+  <input type="number" id="orisLi" step="0.01">
+  
+  <label>Oculi rechts (mV):</label>
+  <input type="number" id="oculiRe" step="0.01">
+  
+  <label>Oculi links (mV):</label>
+  <input type="number" id="oculiLi" step="0.01">
+  
+  <button onclick="generiereBefund()">Befund generieren</button>
+
+  <textarea id="ausgabe" readonly></textarea>
+
+  <script>
+    function generiereBefund() {
+      let orisRe = parseFloat(document.getElementById("orisRe").value) || 0;
+      let orisLi = parseFloat(document.getElementById("orisLi").value) || 0;
+      let oculiRe = parseFloat(document.getElementById("oculiRe").value) || 0;
+      let oculiLi = parseFloat(document.getElementById("oculiLi").value) || 0;
+      let normwert = 1.6;
+      let textBlock = "";
+      let orisText = "", oculiText = "", prognose = "";
+      let orisDiff = 0, oculiDiff = 0;
+      let orisSeite = "", oculiSeite = "";
+
+      // ORIS
+      if (orisRe === 0 && orisLi === 0) {
+        orisText = "In der elektroneurographischen Untersuchung waren nach Stimulation über dem N. facialis bds. über dem Foramen stylomastoideum und Ableitung über den Mm. orbiculares orium beiseits keine Potentiale ableitbar.";
+        orisDiff = 1;
+        orisSeite = "beidseitigen";
+      } else if (orisRe === 0) {
+        orisText = "In der elektroneurographischen Untersuchung war nach Stimulation über dem N. facialis bds. über dem Foramen stylomastoideum und Ableitung über dem M. orbicularis oris rechts kein Potential ableitbar; links zeigte sich eine Amplitude von " + orisLi.toFixed(2) + "mV.";
+        orisDiff = 1;
+        orisSeite = "rechten";
+      } else if (orisLi === 0) {
+        orisText = "In der elektroneurographischen Untersuchung war nach Stimulation über dem N. facialis bds. über dem Foramen stylomastoideum und Ableitung über dem M. orbicularis oris links kein Potential ableitbar; rechts zeigte sich eine Amplitude von " + orisRe.toFixed(2) + "mV.";
+        orisDiff = 1;
+        orisSeite = "linken";
+      } else {
+        if (orisRe < orisLi) {
+          orisDiff = 1 - (orisRe / orisLi);
+          orisSeite = "rechten";
+        } else {
+          orisDiff = 1 - (orisLi / orisRe);
+          orisSeite = "linken";
+        }
+
+        let orisReText = orisRe === 0 ? "nicht ableitbar" :
+                         (orisRe >= 0.1 && orisRe < 1.6) ? "reduzierte Amplitude (" + orisRe.toFixed(2) + "mV)" :
+                         "normwertige Amplitude (" + orisRe.toFixed(2) + "mV)";
+
+        let orisLiText = orisLi === 0 ? "nicht ableitbar" :
+                         (orisLi >= 0.1 && orisLi < 1.6) ? "reduzierte Amplitude (" + orisLi.toFixed(2) + "mV)" :
+                         "normwertige Amplitude (" + orisLi.toFixed(2) + "mV)";
+
+        if (orisDiff * 100 >= 30) {
+          orisText = "In der elektroneurographischen Untersuchung zeigen sich nach Stimulation über dem N. facialis bds. über dem Foramen stylomastoideum und Ableitung über den Mm. orbiculares orium eine " + orisReText + " rechts und eine " + orisLiText + " links. Es besteht eine relative Seitendifferenz von " + Math.round(orisDiff * 100) + "% zu Ungunsten der " + orisSeite + " Seite.";
+        } else {
+          orisText = "In der elektroneurographischen Untersuchung zeigen sich nach Stimulation über dem N. facialis bds. über dem Foramen stylomastoideum und Ableitung über den Mm. orbiculares orium eine " + orisReText + " rechts und eine " + orisLiText + " links, ohne relevante Seitendifferenz.";
+          orisDiff = 0;
+          orisSeite = "";
+        }
+      }
+
+      // OCULI
+      if (oculiRe === 0 && oculiLi === 0) {
+        oculiText = "Nach Ableitung über dem Mm. orbiculares oculorum waren beidseits keine Potentiale ableitbar.";
+        oculiDiff = 1;
+        oculiSeite = "beidseitigen";
+      } else if (oculiRe === 0) {
+        oculiText = "Nach Ableitung über dem M. orbicularis oculi war rechts kein Potential ableitbar; links zeigte sich eine Amplitude von " + oculiLi.toFixed(2) + "mV.";
+        oculiDiff = 1;
+        oculiSeite = "rechten";
+      } else if (oculiLi === 0) {
+        oculiText = "Nach Ableitung über dem M. orbicularis oculi war links kein Potential ableitbar; rechts zeigte sich eine Amplitude von " + oculiRe.toFixed(2) + "mV.";
+        oculiDiff = 1;
+        oculiSeite = "linken";
+      } else if (oculiRe < normwert || oculiLi < normwert) {
+        if (oculiRe < oculiLi) {
+          oculiDiff = 1 - (oculiRe / oculiLi);
+          oculiSeite = "rechten";
+        } else {
+          oculiDiff = 1 - (oculiLi / oculiRe);
+          oculiSeite = "linken";
+        }
+        oculiText = "Nach Ableitung über den Mm. orbiculares oculorum ergeben sich Amplituden von " + oculiRe.toFixed(2) + "mV rechts und " + oculiLi.toFixed(2) + "mV links. Die relative Seitendifferenz beträgt " + Math.round(oculiDiff * 100) + "% zu Ungunsten der " + oculiSeite + " Seite.";
+      } else {
+        oculiText = "Nach Ableitung über den Mm. orbiculares oculorum ergeben sich beidseits normwertige Amplituden (rechts " + oculiRe.toFixed(2) + "mV; links " + oculiLi.toFixed(2) + "mV), ohne relevante Seitendifferenz.";
+      }
+
+      // Prognose
+      if (orisDiff === 1) {
+        prognose = "Die Prognose ist (unter Annahme einer idiopathischen Ätiologie) aufgrund des vollständigen Funktionsverlusts als ungünstig einzuschätzen.";
+      } else if (orisDiff * 100 < 30) {
+        prognose = "Der Befund ist (unter Annahme einer idiopathischen Ätiologie) allenfalls mit einer milden axonalen Läsion des N. facialis vereinbar.";
+      } else if (orisDiff * 100 >= 30 && orisDiff * 100 < 70) {
+        prognose = "Die Prognose ist (unter Annahme einer idiopathischen Ätiologie)aufgrund der Seitendifferenz von <70% prinzipiell als gut einzustufen.";
+      } else if (orisDiff * 100 <= 94) {
+        prognose = "Die Prognose ist (unter Annahme einer idiopathischen Ätiologie) aufgrund der relativen Seitendifferenz (71-94%) als unklar zu beurteilen.";
+      } else {
+        prognose = "Die Prognose ist (unter Annahme einer idiopathischen Ätiologie) aufgrund der ausgeprägten Seitendifferenz (>95%) als ungünstig einzuschätzen.";
+      }
+
+      textBlock = "ELEKTRONEUROGRAPHISCHER BEFUND:\n\n" +
+                  orisText + "\n" +
+                  oculiText + "\n\n" +
+                  "BEURTEILUNG:\n";
+
+      if (orisDiff * 100 < 10) {
+        textBlock += "Normalbefund.";
+      } else if (orisDiff * 100 >= 30) {
+        textBlock += "Der Befund ist mit einer axonalen Läsion des " + orisSeite + " N. facialis vereinbar. " + prognose;
+      } else {
+        textBlock += prognose;
+      }
+
+      document.getElementById("ausgabe").value = textBlock;
+    }
+  </script>
+
+</body>
+</html>
