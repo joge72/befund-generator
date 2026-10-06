@@ -77,7 +77,13 @@
   <p class="hinweis">Die Vorlage enthält Name, Weiterbildungsjahr, Stationswunsch sowie eine Liste für Nachtdienste und Abwesenheiten (mit Auswahlliste).</p>
   <button onclick="vorlageHerunterladen()">Excel-Vorlage herunterladen</button>
 
-  <h3>3. Ausgefüllte Dateien einlesen</h3>
+  <h3>3. Kollegen-Eingaben konsolidieren</h3>
+  <p class="hinweis">Dateien aus den Kollegen-Templates (mit täglichen Einträgen für NFA, StD, SII, RT, Ambulanz, U, Kongress, Sonstiges) hochladen und mit der Stammtabelle abgleichen.</p>
+  <input type="file" id="kollegendateien" accept=".xlsx" multiple onchange="kollegenEinlesen(this.files)">
+  <ul id="kollegenliste"></ul>
+
+  <h3>3b. Standard-Eingaben (Vorlage)</h3>
+  <p class="hinweis">Oder: Dateien aus der Standard-Vorlage (mit Nachtdiensten und Abwesenheiten) hochladen.</p>
   <input type="file" id="dateien" accept=".xlsx" multiple onchange="dateienEinlesen(this.files)">
   <ul id="dateiliste"></ul>
 
@@ -301,6 +307,104 @@
       if (!kopfzeile) arzt.warnungen.push("Keine Tabelle mit „Von“/„Art“ gefunden.");
       if (!arzt.wbJahr) arzt.warnungen.push("Weiterbildungsjahr fehlt – als unerfahren gewertet.");
       return arzt;
+    }
+
+    // ---------- Kollegeneingaben (tägliches Format) ----------
+    const KOLLEGEN_ZUORDNUNG = {
+      "nfa": "Nachtdienst", "nachtdienst": "Nachtdienst",
+      "std": "Fortbildung", "stationdienst": "Fortbildung",
+      "sii": "Fortbildung", "si": "Fortbildung",
+      "rt": "Freizeitausgleich", "ruhetag": "Freizeitausgleich",
+      "ambulanz": "Sonstige Abwesenheit",
+      "u": "Urlaub", "urlaub": "Urlaub",
+      "kongress": "Sonstige Abwesenheit", "conference": "Sonstige Abwesenheit",
+      "sonstiges": "Sonstige Abwesenheit", "sonstige": "Sonstige Abwesenheit"
+    };
+
+    function kollgenMappieren(code) {
+      if (!code || code === "") return null;
+      const normalized = zellText(code).toLowerCase().trim();
+      return KOLLEGEN_ZUORDNUNG[normalized] || null;
+    }
+
+    async function kollegenEinlesen(dateien) {
+      const erfolgt = [], fehler = [];
+      for (const datei of dateien) {
+        try {
+          const wb = new ExcelJS.Workbook();
+          await wb.xlsx.load(await datei.arrayBuffer());
+          const ws = wb.worksheets[0];
+          if (!ws) throw new Error("Keine Tabelle gefunden");
+
+          let name = null, datum_spalte = null, eintrag_spalte = null, kopf_zeile = 0;
+          let spalten = {};
+
+          // Kopfzeile finden
+          ws.eachRow((row, r) => {
+            if (kopf_zeile) return;
+            const cells = [];
+            row.eachCell((c, col) => {
+              const txt = zellText(c.value).toLowerCase().trim();
+              cells.push({ txt, col });
+              if (txt.includes("name") && !name) name = zellText(row.getCell(col === 1 ? 2 : col + 1).value);
+              if (txt === "datum" || txt === "date") spalten.datum = col;
+              if (txt === "eintrag" || txt === "entry" || txt.includes("eintra")) spalten.eintrag = col;
+            });
+            if (spalten.datum && spalten.eintrag) kopf_zeile = r;
+          });
+
+          if (!name) name = datei.name.replace(/\.xlsx$/i, "");
+          if (!kopf_zeile) throw new Error("Kopfzeile mit Datum/Eintrag nicht gefunden");
+
+          const eintraege = [];
+          ws.eachRow((row, r) => {
+            if (r <= kopf_zeile) return;
+            const datumRaw = row.getCell(spalten.datum).value;
+            const eintragRaw = row.getCell(spalten.eintrag).value;
+            if (!datumRaw || !eintragRaw) return;
+
+            const datum = zuDatum(datumRaw);
+            if (!datum) return;
+
+            const art = kollgenMappieren(eintragRaw);
+            if (art) eintraege.push({ von: datum, bis: datum, art, bemerkung: "" });
+          });
+
+          if (eintraege.length === 0) {
+            fehler.push({ name, grund: "Keine gültigen Einträge gefunden" });
+          } else {
+            erfolgt.push({ name, eintraege, quelle: "kolleg" });
+          }
+        } catch (e) {
+          fehler.push({ name: datei.name, grund: e.message });
+        }
+      }
+
+      // In aerzte integrieren
+      erfolgt.forEach(e => {
+        const vorhanden = aerzte.findIndex(a => a.name.toLowerCase() === e.name.toLowerCase());
+        if (vorhanden >= 0) {
+          aerzte[vorhanden].eintraege = e.eintraege;
+          aerzte[vorhanden].quelle = "kolleg";
+        } else {
+          aerzte.push({ name: e.name, wbJahr: null, wunsch: "", datei: e.name, eintraege: e.eintraege, warnungen: [], stamm: "auto", quelle: "kolleg" });
+        }
+      });
+
+      el("kollegendateien").value = "";
+      kollegenlisteAnzeigen(erfolgt, fehler);
+    }
+
+    function kollegenlisteAnzeigen(erfolgt, fehler) {
+      const ul = el("kollegenliste");
+      let html = "";
+      erfolgt.forEach(e => {
+        html += `<li class="ok"><b>${esc(e.name)}</b> – ${e.eintraege.length} Einträge importiert</li>`;
+      });
+      fehler.forEach(f => {
+        html += `<li><span class="fehler"><b>${esc(f.name)}</b>: ${esc(f.grund)}</span></li>`;
+      });
+      ul.innerHTML = html + (erfolgt.length ? `<li class="ok">${erfolgt.length} Dateien konsolidiert.</li>` : "");
     }
 
     function dateilisteAnzeigen() {
