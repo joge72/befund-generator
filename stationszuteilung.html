@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stationszuteilung</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; color: #222; }
+    h2 { margin-bottom: 4px; }
+    h3 { margin-top: 28px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+    .hinweis { color: #555; font-size: 0.9em; max-width: 900px; }
+    label { margin-right: 14px; }
+    input[type=number] { width: 60px; }
+    input[type=text].kurz { width: 50px; }
+    button { margin: 8px 8px 8px 0; padding: 8px 16px; cursor: pointer; }
+    table { border-collapse: collapse; }
+    .konfig td, .konfig th { padding: 4px 8px; border: 1px solid #ddd; }
+    .konfig th { background: #f2f2f2; text-align: left; }
+    #dateiliste li { margin: 2px 0; }
+    .fehler { color: #b00020; }
+    .warnung { color: #a15c00; }
+    .ok { color: #1b7a2b; }
+    .planwrap { overflow-x: auto; max-width: 100%; border: 1px solid #ddd; }
+    .plan { font-size: 12px; }
+    .plan th, .plan td { border: 1px solid #ddd; padding: 2px 4px; text-align: center; white-space: nowrap; }
+    .plan th.name, .plan td.name { text-align: left; position: sticky; left: 0; background: #fff; z-index: 1; }
+    .plan .we { background: #eee; color: #888; }
+    .plan .luecke { background: #f8c9c9; font-weight: bold; }
+    .plan .gruppe td { background: #f2f2f2; font-weight: bold; text-align: left; }
+    .plan .summe td { font-weight: bold; }
+    .c-N { background: #3b4a8c; color: #fff; }
+    .c-NF { background: #c9cfe8; }
+    .c-U { background: #ffe08a; }
+    .c-F { background: #c8e6c9; }
+    .c-FA { background: #c9cfe8; }
+    .c-S { background: #d7ccc8; }
+    .aushilfe { font-style: italic; outline: 2px dashed #b00020; outline-offset: -2px; }
+    .legende span { display: inline-block; padding: 2px 6px; margin: 2px 6px 2px 0; border: 1px solid #ccc; font-size: 12px; }
+    .uebersicht td, .uebersicht th { border: 1px solid #ddd; padding: 3px 8px; }
+    .uebersicht th { background: #f2f2f2; }
+    select { padding: 2px; }
+  </style>
+</head>
+<body>
+
+  <h2>Stationszuteilung Assistenzärzte</h2>
+  <p class="hinweis">
+    Ablauf: (1) Stationen und Zeitraum festlegen, (2) Vorlage herunterladen und an alle Kolleginnen und Kollegen schicken,
+    (3) die ausgefüllten Dateien hier einlesen, (4) Zuteilung berechnen, prüfen und bei Bedarf manuell anpassen, (5) als Excel exportieren.
+    Alle Daten bleiben auf diesem Rechner, es wird nichts hochgeladen.
+  </p>
+
+  <h3>1. Stationen und Zeitraum</h3>
+  <table class="konfig" id="stationstabelle">
+    <thead><tr><th>Station</th><th>Kürzel</th><th>Mindestbesetzung</th><th>Wunschbesetzung</th><th>Erfahrene Person nötig</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <button onclick="stationHinzufuegen()">+ Station</button>
+
+  <p>
+    <label>Planungszeitraum von <input type="date" id="von"></label>
+    <label>bis <input type="date" id="bis"></label>
+  </p>
+  <p>
+    <label>„Erfahren“ ab Weiterbildungsjahr <input type="number" id="erfahrenAb" min="1" max="6" value="3"></label>
+    <label><input type="checkbox" id="folgetagFrei" checked> Tag nach Nachtdienst frei</label>
+    <label><input type="checkbox" id="diensttagFrei"> Tag des Nachtdienstes frei</label>
+    <label><input type="checkbox" id="wochenendeAus" checked> Wochenenden nicht auf Station planen</label>
+  </p>
+  <p>
+    <label>Feiertage (TT.MM.JJJJ, durch Komma getrennt):<br>
+      <input type="text" id="feiertage" style="width: 500px" placeholder="z. B. 01.11.2026, 25.12.2026, 26.12.2026">
+    </label>
+  </p>
+
+  <h3>2. Vorlage für die Kollegen</h3>
+  <p class="hinweis">Die Vorlage enthält Name, Weiterbildungsjahr, Stationswunsch sowie eine Liste für Nachtdienste und Abwesenheiten (mit Auswahlliste).</p>
+  <button onclick="vorlageHerunterladen()">Excel-Vorlage herunterladen</button>
+
+  <h3>3. Ausgefüllte Dateien einlesen</h3>
+  <input type="file" id="dateien" accept=".xlsx" multiple onchange="dateienEinlesen(this.files)">
+  <ul id="dateiliste"></ul>
+
+  <h3>4. Zuteilung</h3>
+  <button onclick="berechnen()">Zuteilung berechnen</button>
+  <button onclick="exportieren()" id="exportBtn" disabled>Plan als Excel exportieren</button>
+  <div id="meldungen"></div>
+  <div id="aerzteuebersicht"></div>
+  <div class="legende" id="legende"></div>
+  <div class="planwrap" id="planwrap" style="display:none"></div>
+
+  <script src="lib/exceljs.min.js"></script>
+  <script>
+    // ---------- Konstanten ----------
+    const ARTEN = {
+      "Nachtdienst":          { code: "N",  text: "Nachtdienst" },
+      "Urlaub":               { code: "U",  text: "Urlaub" },
+      "Fortbildung":          { code: "F",  text: "Fortbildung" },
+      "Freizeitausgleich":    { code: "FA", text: "Freizeitausgleich" },
+      "Sonstige Abwesenheit": { code: "S",  text: "Sonstige Abwesenheit" }
+    };
+    const FARBEN_EXCEL = { N: "FF3B4A8C", NF: "FFC9CFE8", U: "FFFFE08A", F: "FFC8E6C9", FA: "FFC9CFE8", S: "FFD7CCC8" };
+    const STATIONSFARBEN = ["#bbdefb", "#ffccbc", "#d1c4e9", "#b2dfdb", "#f0f4c3", "#f8bbd0"];
+    const WOCHENTAGE = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+
+    let stationen = [
+      { name: "Stroke Unit", kurz: "SU", min: 2, ideal: 3, erfahren: true },
+      { name: "Station A",   kurz: "A",  min: 2, ideal: 3, erfahren: true },
+      { name: "Station B",   kurz: "B",  min: 2, ideal: 3, erfahren: false }
+    ];
+    let aerzte = [];          // eingelesene Ärzte
+    let ergebnis = null;      // letzte Berechnung
+
+    // ---------- Datumshilfen (intern immer "JJJJ-MM-TT") ----------
+    function iso(y, m, d) { return y + "-" + String(m).padStart(2, "0") + "-" + String(d).padStart(2, "0"); }
+    function isoAusDate(dt) { return iso(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate()); }
+    function dateAusIso(s) { const [y, m, d] = s.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d)); }
+    function plusTage(s, n) { const dt = dateAusIso(s); dt.setUTCDate(dt.getUTCDate() + n); return isoAusDate(dt); }
+    function deutsch(s) { const [y, m, d] = s.split("-"); return d + "." + m + "." + y; }
+    function wochentag(s) { return dateAusIso(s).getUTCDay(); }
+    function tageZwischen(von, bis) { const t = []; for (let s = von; s <= bis; s = plusTage(s, 1)) t.push(s); return t; }
+
+    // Excel-Zellwert -> "JJJJ-MM-TT" oder null
+    function zuDatum(wert) {
+      if (wert == null || wert === "") return null;
+      if (wert instanceof Date) return isoAusDate(wert);
+      if (typeof wert === "object" && wert.result !== undefined) return zuDatum(wert.result);
+      if (typeof wert === "number") return isoAusDate(new Date(Date.UTC(1899, 11, 30) + Math.round(wert) * 86400000));
+      const s = String(wert).trim();
+      let m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+      if (m) { let y = Number(m[3]); if (y < 100) y += 2000; return iso(y, Number(m[2]), Number(m[1])); }
+      m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (m) return iso(Number(m[1]), Number(m[2]), Number(m[3]));
+      return null;
+    }
+    function zellText(wert) {
+      if (wert == null) return "";
+      if (typeof wert === "object") {
+        if (wert.richText) return wert.richText.map(r => r.text).join("").trim();
+        if (wert.text !== undefined) return String(wert.text).trim();
+        if (wert.result !== undefined) return String(wert.result).trim();
+      }
+      return String(wert).trim();
+    }
+
+    // ---------- Einstellungen speichern (nur Komfort) ----------
+    function speichern() {
+      try {
+        localStorage.setItem("stationszuteilung", JSON.stringify({
+          stationen, von: el("von").value, bis: el("bis").value, erfahrenAb: el("erfahrenAb").value,
+          folgetagFrei: el("folgetagFrei").checked, diensttagFrei: el("diensttagFrei").checked,
+          wochenendeAus: el("wochenendeAus").checked, feiertage: el("feiertage").value
+        }));
+      } catch (e) { /* ohne Speicher weiterarbeiten */ }
+    }
+    function laden() {
+      try {
+        const d = JSON.parse(localStorage.getItem("stationszuteilung") || "null");
+        if (!d) return false;
+        stationen = d.stationen || stationen;
+        el("von").value = d.von || ""; el("bis").value = d.bis || "";
+        el("erfahrenAb").value = d.erfahrenAb || 3;
+        el("folgetagFrei").checked = d.folgetagFrei !== false;
+        el("diensttagFrei").checked = !!d.diensttagFrei;
+        el("wochenendeAus").checked = d.wochenendeAus !== false;
+        el("feiertage").value = d.feiertage || "";
+        return true;
+      } catch (e) { return false; }
+    }
+    function el(id) { return document.getElementById(id); }
+    function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+    // ---------- Stationstabelle ----------
+    function stationenAnzeigen() {
+      const tb = document.querySelector("#stationstabelle tbody");
+      tb.innerHTML = "";
+      stationen.forEach((s, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          `<td><input type="text" value="${esc(s.name)}" data-f="name"></td>` +
+          `<td><input type="text" class="kurz" value="${esc(s.kurz)}" data-f="kurz"></td>` +
+          `<td><input type="number" min="0" value="${s.min}" data-f="min"></td>` +
+          `<td><input type="number" min="0" value="${s.ideal}" data-f="ideal"></td>` +
+          `<td style="text-align:center"><input type="checkbox" ${s.erfahren ? "checked" : ""} data-f="erfahren"></td>` +
+          `<td><button onclick="stationEntfernen(${i})">entfernen</button></td>`;
+        tr.querySelectorAll("input").forEach(inp => inp.addEventListener("change", () => {
+          const f = inp.dataset.f;
+          s[f] = f === "erfahren" ? inp.checked : (f === "min" || f === "ideal") ? Math.max(0, Number(inp.value) || 0) : inp.value.trim();
+          speichern();
+        }));
+        tb.appendChild(tr);
+      });
+    }
+    function stationHinzufuegen() {
+      stationen.push({ name: "Neue Station", kurz: "N" + (stationen.length + 1), min: 1, ideal: 2, erfahren: false });
+      stationenAnzeigen(); speichern();
+    }
+    function stationEntfernen(i) { stationen.splice(i, 1); stationenAnzeigen(); speichern(); }
+
+    // ---------- Vorlage ----------
+    async function vorlageHerunterladen() {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Angaben");
+      ws.columns = [{ width: 24 }, { width: 16 }, { width: 24 }, { width: 40 }];
+      ws.getCell("A1").value = "Name:";
+      ws.getCell("A2").value = "Weiterbildungsjahr:";
+      ws.getCell("A3").value = "Stationswunsch:";
+      ["A1", "A2", "A3"].forEach(a => ws.getCell(a).font = { bold: true });
+      ["B1", "B2", "B3"].forEach(a => {
+        ws.getCell(a).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF9C4" } };
+        ws.getCell(a).border = { bottom: { style: "thin" } };
+      });
+      ws.mergeCells("B1:C1");
+      ws.mergeCells("B3:C3");
+      ws.getCell("B2").dataValidation = { type: "whole", allowBlank: true, operator: "between", formulae: [1, 6] };
+      ws.getCell("B3").dataValidation = {
+        type: "list", allowBlank: true,
+        formulae: ['"' + ["egal"].concat(stationen.map(s => s.name)).join(",").replace(/"/g, "") + '"']
+      };
+      const zr = el("von").value && el("bis").value ? " für " + deutsch(el("von").value) + " bis " + deutsch(el("bis").value) : "";
+      ws.getCell("A5").value = "Bitte alle Nachtdienste und geplanten Abwesenheiten" + zr + " eintragen. " +
+        "Für einzelne Tage (z. B. Nachtdienst) nur „Von“ ausfüllen.";
+      ws.getCell("A5").font = { italic: true, color: { argb: "FF555555" } };
+      const kopf = ws.getRow(7);
+      kopf.values = ["Von", "Bis", "Art", "Bemerkung"];
+      kopf.font = { bold: true };
+      kopf.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0E0E0" } }; c.border = { bottom: { style: "thin" } }; });
+      for (let r = 8; r <= 80; r++) {
+        ["A", "B"].forEach(col => {
+          const c = ws.getCell(col + r);
+          c.numFmt = "dd.mm.yyyy";
+          c.dataValidation = { type: "date", allowBlank: true, operator: "greaterThan", formulae: [new Date(Date.UTC(2000, 0, 1))],
+            showErrorMessage: true, errorTitle: "Datum", error: "Bitte ein Datum eingeben (TT.MM.JJJJ)." };
+        });
+        ws.getCell("C" + r).dataValidation = { type: "list", allowBlank: true, formulae: ['"' + Object.keys(ARTEN).join(",") + '"'],
+          showErrorMessage: true, errorTitle: "Art", error: "Bitte einen Eintrag aus der Liste wählen." };
+      }
+      ws.views = [{ state: "frozen", ySplit: 7 }];
+      await herunterladen(wb, "Vorlage_Dienste_Abwesenheiten.xlsx");
+    }
+
+    async function herunterladen(wb, dateiname) {
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = dateiname;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    // ---------- Einlesen ----------
+    async function dateienEinlesen(dateien) {
+      for (const datei of dateien) {
+        try {
+          const wb = new ExcelJS.Workbook();
+          await wb.xlsx.load(await datei.arrayBuffer());
+          const arzt = blattAuswerten(wb.getWorksheet("Angaben") || wb.worksheets[0], datei.name);
+          const vorhanden = aerzte.findIndex(a => a.name.toLowerCase() === arzt.name.toLowerCase());
+          if (vorhanden >= 0) { arzt.stamm = aerzte[vorhanden].stamm; aerzte[vorhanden] = arzt; }
+          else aerzte.push(arzt);
+        } catch (e) {
+          aerzte.push({ name: datei.name, datei: datei.name, fehlerhaft: true, warnungen: ["Datei konnte nicht gelesen werden: " + e.message], eintraege: [] });
+        }
+      }
+      el("dateien").value = "";
+      dateilisteAnzeigen();
+    }
+
+    function blattAuswerten(ws, dateiname) {
+      const arzt = { name: "", wbJahr: null, wunsch: "", datei: dateiname, eintraege: [], warnungen: [], stamm: "auto" };
+      let kopfzeile = null, spalten = {};
+      ws.eachRow((row, r) => {
+        const a = zellText(row.getCell(1).value).toLowerCase();
+        const b = row.getCell(2).value;
+        if (!kopfzeile) {
+          if (a.startsWith("name")) arzt.name = zellText(b);
+          else if (a.startsWith("weiterbildung")) arzt.wbJahr = parseInt(zellText(b), 10) || null;
+          else if (a.includes("wunsch")) arzt.wunsch = zellText(b);
+          row.eachCell((c, col) => {
+            const t = zellText(c.value).toLowerCase();
+            if (t === "von") spalten.von = col; else if (t === "bis") spalten.bis = col;
+            else if (t === "art") spalten.art = col; else if (t.startsWith("bemerk")) spalten.bem = col;
+          });
+          if (spalten.von && spalten.art) kopfzeile = r;
+          return;
+        }
+        const vonRoh = row.getCell(spalten.von).value;
+        const artRoh = zellText(row.getCell(spalten.art).value);
+        if ((vonRoh == null || vonRoh === "") && !artRoh) return;
+        const von = zuDatum(vonRoh);
+        const bis = spalten.bis ? (zuDatum(row.getCell(spalten.bis).value) || von) : von;
+        const art = Object.keys(ARTEN).find(k => k.toLowerCase() === artRoh.toLowerCase())
+          || (artRoh.toLowerCase().startsWith("nacht") ? "Nachtdienst" : null);
+        if (!von) { arzt.warnungen.push(`Zeile ${r}: Datum „${zellText(vonRoh)}“ nicht erkannt – ignoriert.`); return; }
+        if (!art) { arzt.warnungen.push(`Zeile ${r}: Art „${artRoh}“ unbekannt – als sonstige Abwesenheit gewertet.`); }
+        if (bis < von) { arzt.warnungen.push(`Zeile ${r}: „Bis“ liegt vor „Von“ – ignoriert.`); return; }
+        arzt.eintraege.push({ von, bis, art: art || "Sonstige Abwesenheit", bemerkung: spalten.bem ? zellText(row.getCell(spalten.bem).value) : "" });
+      });
+      if (!arzt.name) { arzt.name = dateiname.replace(/\.xlsx$/i, ""); arzt.warnungen.push("Kein Name eingetragen – Dateiname verwendet."); }
+      if (!kopfzeile) arzt.warnungen.push("Keine Tabelle mit „Von“/„Art“ gefunden.");
+      if (!arzt.wbJahr) arzt.warnungen.push("Weiterbildungsjahr fehlt – als unerfahren gewertet.");
+      return arzt;
+    }
+
+    function dateilisteAnzeigen() {
+      const ul = el("dateiliste");
+      ul.innerHTML = aerzte.map((a, i) => {
+        const n = a.eintraege.filter(e => e.art === "Nachtdienst").length;
+        const info = a.fehlerhaft ? "" : ` – WB-Jahr ${a.wbJahr || "?"}, ${n} Nachtdienste, ${a.eintraege.length - n} Abwesenheiten` +
+          (a.wunsch && a.wunsch !== "egal" ? `, Wunsch: ${esc(a.wunsch)}` : "");
+        const warn = a.warnungen.length ? `<br><span class="${a.fehlerhaft ? "fehler" : "warnung"}">${a.warnungen.map(esc).join("<br>")}</span>` : "";
+        return `<li><b>${esc(a.name)}</b>${info} <button onclick="arztEntfernen(${i})">entfernen</button>${warn}</li>`;
+      }).join("") + (aerzte.length ? `<li class="ok">${aerzte.filter(a => !a.fehlerhaft).length} Ärztinnen/Ärzte eingelesen.</li>` : "");
+    }
+    function arztEntfernen(i) { aerzte.splice(i, 1); dateilisteAnzeigen(); }
+
+    // ---------- Berechnung ----------
+    function einstellungen() {
+      const feiertage = new Set(el("feiertage").value.split(/[,;\s]+/).map(zuDatum).filter(Boolean));
+      return {
+        von: el("von").value, bis: el("bis").value, erfahrenAb: Number(el("erfahrenAb").value) || 3,
+        folgetagFrei: el("folgetagFrei").checked, diensttagFrei: el("diensttagFrei").checked,
+        wochenendeAus: el("wochenendeAus").checked, feiertage
+      };
+    }
+
+    // Status je Arzt und Tag: null = verfügbar, sonst Code (N, NF, U, F, FA, S)
+    function statusKarte(arzt, tage, e) {
+      const st = {};
+      const setze = (tag, code, vorrang) => { if (!(tag in st) || vorrang) st[tag] = code; };
+      for (const ein of arzt.eintraege) {
+        if (ein.art === "Nachtdienst") continue;
+        for (let t = ein.von; t <= ein.bis; t = plusTage(t, 1)) setze(t, ARTEN[ein.art].code, false);
+      }
+      for (const ein of arzt.eintraege) {
+        if (ein.art !== "Nachtdienst") continue;
+        for (let t = ein.von; t <= ein.bis; t = plusTage(t, 1)) {
+          setze(t, "N", true);
+          if (e.folgetagFrei) setze(plusTage(t, 1), "NF", false);
+        }
+      }
+      const verfuegbar = {};
+      for (const t of tage) verfuegbar[t] = !st[t] || (st[t] === "N" && !e.diensttagFrei);
+      return { st, verfuegbar };
+    }
+
+    function berechnen() {
+      const e = einstellungen();
+      const meld = [];
+      if (!e.von || !e.bis || e.bis < e.von) { zeigeMeldungen([`<span class="fehler">Bitte einen gültigen Planungszeitraum angeben.</span>`]); return; }
+      if (!stationen.length) { zeigeMeldungen([`<span class="fehler">Bitte mindestens eine Station anlegen.</span>`]); return; }
+      const liste = aerzte.filter(a => !a.fehlerhaft);
+      if (!liste.length) { zeigeMeldungen([`<span class="fehler">Bitte zuerst die ausgefüllten Dateien einlesen.</span>`]); return; }
+
+      const alleTage = tageZwischen(e.von, e.bis);
+      const arbeitstage = alleTage.filter(t => !(e.wochenendeAus && (wochentag(t) === 0 || wochentag(t) === 6)) && !e.feiertage.has(t));
+      const S = stationen.length;
+      const info = liste.map(a => {
+        const k = statusKarte(a, alleTage, e);
+        const wunschIdx = stationen.findIndex(s => s.name.toLowerCase() === (a.wunsch || "").toLowerCase());
+        const fix = stationen.findIndex(s => s.kurz === a.stamm);
+        return { arzt: a, ...k, erfahren: (a.wbJahr || 0) >= e.erfahrenAb, wunschIdx, fix,
+                 vektor: arbeitstage.map(t => k.verfuegbar[t] ? 1 : 0) };
+      });
+
+      // Kostenfunktion für eine Stammzuteilung (Index der Station je Arzt)
+      const W_MIN = 100, W_ERFAHREN = 40, W_IDEAL = 3, W_WUNSCH = 15, W_UEBER = 1;
+      function kosten(zuteilung) {
+        let k = 0;
+        for (let d = 0; d < arbeitstage.length; d++) {
+          const anz = new Array(S).fill(0), erf = new Array(S).fill(0);
+          for (let i = 0; i < info.length; i++) if (info[i].vektor[d]) { anz[zuteilung[i]]++; if (info[i].erfahren) erf[zuteilung[i]]++; }
+          for (let s = 0; s < S; s++) {
+            k += W_MIN * Math.max(0, stationen[s].min - anz[s]);
+            k += W_IDEAL * Math.max(0, stationen[s].ideal - anz[s]);
+            k += W_UEBER * Math.max(0, anz[s] - stationen[s].ideal);
+            if (stationen[s].erfahren && erf[s] === 0) k += W_ERFAHREN;
+          }
+        }
+        const faktor = arbeitstage.length / 4 || 1;   // Wünsche wiegen unabhängig von der Zeitraumlänge ähnlich
+        for (let i = 0; i < info.length; i++) if (info[i].wunschIdx >= 0 && zuteilung[i] !== info[i].wunschIdx) k += W_WUNSCH * faktor;
+        return k;
+      }
+
+      // Startlösung: Wunsch bzw. reihum, dann lokale Suche (Verschieben und Tauschen)
+      let z = info.map((x, i) => x.fix >= 0 ? x.fix : x.wunschIdx >= 0 ? x.wunschIdx : i % S);
+      let best = kosten(z), verbessert = true, runden = 0;
+      while (verbessert && runden < 200) {
+        verbessert = false; runden++;
+        for (let i = 0; i < info.length; i++) {
+          if (info[i].fix >= 0) continue;
+          for (let s = 0; s < S; s++) {
+            if (s === z[i]) continue;
+            const alt = z[i]; z[i] = s;
+            const k = kosten(z);
+            if (k < best - 1e-9) { best = k; verbessert = true; } else z[i] = alt;
+          }
+        }
+        for (let i = 0; i < info.length; i++) for (let j = i + 1; j < info.length; j++) {
+          if (info[i].fix >= 0 || info[j].fix >= 0 || z[i] === z[j]) continue;
+          [z[i], z[j]] = [z[j], z[i]];
+          const k = kosten(z);
+          if (k < best - 1e-9) { best = k; verbessert = true; } else [z[i], z[j]] = [z[j], z[i]];
+        }
+        // ganze Gruppen zweier Stationen tauschen (sonst bleibt z. B. ein Wunsch an einem lokalen Optimum hängen)
+        for (let a = 0; a < S; a++) for (let c = a + 1; c < S; c++) {
+          const alt = z.slice();
+          z = z.map((v, i) => info[i].fix >= 0 ? v : v === a ? c : v === c ? a : v);
+          const k = kosten(z);
+          if (k < best - 1e-9) { best = k; verbessert = true; } else z = alt;
+        }
+      }
+
+      // Tagesplanung: bei Unterbesetzung tageweise Aushilfe von Stationen mit Überschuss
+      const tagesplan = {};     // tag -> Array je Arzt: Stationsindex oder null
+      const luecken = [], ohneErfahrene = [];
+      for (const t of arbeitstage) {
+        const p = info.map((x, i) => x.verfuegbar[t] ? z[i] : null);
+        const aushilfe = info.map(() => false);
+        const zaehle = s => p.filter(v => v === s).length;
+        const erfZahl = s => p.filter((v, i) => v === s && info[i].erfahren).length;
+        for (let schutz = 0; schutz < 50; schutz++) {
+          const bedarf = stationen.map((st, s) => st.min - zaehle(s));
+          const ziel = bedarf.indexOf(Math.max(...bedarf));
+          if (bedarf[ziel] <= 0) break;
+          let spender = -1, ueber = 0;
+          stationen.forEach((st, s) => { const u = zaehle(s) - st.min; if (s !== ziel && u > ueber) { ueber = u; spender = s; } });
+          if (spender < 0) break;
+          // bevorzugt jemanden, dessen Wegfall der Spenderstation nicht die letzte erfahrene Person nimmt
+          const kandidaten = p.map((v, i) => i).filter(i => p[i] === spender && !aushilfe[i]);
+          kandidaten.sort((a, b) => {
+            const wert = i => (info[i].erfahren && erfZahl(spender) <= 1 ? 2 : 0) - (info[i].erfahren && erfZahl(ziel) === 0 ? 1 : 0);
+            return wert(a) - wert(b);
+          });
+          if (!kandidaten.length) break;
+          p[kandidaten[0]] = ziel; aushilfe[kandidaten[0]] = true;
+        }
+        stationen.forEach((st, s) => {
+          const n = zaehle(s);
+          if (n < st.min) luecken.push({ tag: t, station: st.name, fehlt: st.min - n });
+          if (st.erfahren && n > 0 && erfZahl(s) === 0) ohneErfahrene.push({ tag: t, station: st.name });
+        });
+        tagesplan[t] = { p, aushilfe };
+      }
+
+      ergebnis = { e, alleTage, arbeitstage, info, z, tagesplan, luecken, ohneErfahrene };
+
+      // Meldungen
+      if (!luecken.length) meld.push(`<span class="ok">Mindestbesetzung an allen ${arbeitstage.length} Arbeitstagen erreicht.</span>`);
+      else {
+        meld.push(`<span class="fehler">Unterbesetzung an ${new Set(luecken.map(l => l.tag)).size} Tag(en):</span>`);
+        meld.push("<ul>" + luecken.map(l => `<li>${WOCHENTAGE[wochentag(l.tag)]} ${deutsch(l.tag)}: ${esc(l.station)} – es fehlen ${l.fehlt}</li>`).join("") + "</ul>");
+      }
+      if (ohneErfahrene.length) {
+        meld.push(`<span class="warnung">Ohne erfahrene Person (WB-Jahr ≥ ${e.erfahrenAb}):</span>`);
+        meld.push("<ul>" + ohneErfahrene.map(l => `<li>${WOCHENTAGE[wochentag(l.tag)]} ${deutsch(l.tag)}: ${esc(l.station)}</li>`).join("") + "</ul>");
+      }
+      const unerfuellt = info.filter((x, i) => x.wunschIdx >= 0 && z[i] !== x.wunschIdx).map(x => x.arzt.name);
+      if (unerfuellt.length) meld.push(`<span class="warnung">Stationswunsch nicht erfüllt: ${unerfuellt.map(esc).join(", ")}</span>`);
+      zeigeMeldungen(meld);
+      uebersichtAnzeigen();
+      planAnzeigen();
+      el("exportBtn").disabled = false;
+    }
+
+    function zeigeMeldungen(m) { el("meldungen").innerHTML = m.map(x => x.startsWith("<ul") ? x : `<p>${x}</p>`).join(""); }
+
+    function zaehleArzt(x, i) {
+      const r = ergebnis;
+      const naechte = x.arzt.eintraege.filter(e => e.art === "Nachtdienst")
+        .reduce((n, e) => n + tageZwischen(e.von, e.bis).filter(t => t >= r.e.von && t <= r.e.bis).length, 0);
+      const praesent = r.arbeitstage.filter(t => r.tagesplan[t].p[i] !== null).length;
+      const aushilfen = r.arbeitstage.filter(t => r.tagesplan[t].aushilfe[i]).length;
+      return { naechte, praesent, aushilfen };
+    }
+
+    function uebersichtAnzeigen() {
+      const r = ergebnis;
+      const zeilen = r.info.map((x, i) => {
+        const c = zaehleArzt(x, i);
+        const optionen = [`<option value="auto"${x.arzt.stamm === "auto" ? " selected" : ""}>automatisch</option>`]
+          .concat(stationen.map(s => `<option value="${esc(s.kurz)}"${x.arzt.stamm === s.kurz ? " selected" : ""}>${esc(s.name)} (fest)</option>`)).join("");
+        return `<tr><td>${esc(x.arzt.name)}</td><td>${x.arzt.wbJahr || "?"}${x.erfahren ? " ★" : ""}</td>` +
+          `<td>${esc(x.arzt.wunsch || "–")}</td><td><b>${esc(stationen[r.z[i]].name)}</b></td>` +
+          `<td><select onchange="stammSetzen(${aerzte.indexOf(x.arzt)}, this.value)">${optionen}</select></td>` +
+          `<td>${c.praesent} / ${r.arbeitstage.length}</td><td>${c.aushilfen}</td><td>${c.naechte}</td></tr>`;
+      }).join("");
+      el("aerzteuebersicht").innerHTML =
+        `<h3>Stammstationen</h3><p class="hinweis">★ = erfahren. Über „Festlegen“ kann eine Stammstation vorgegeben werden; danach wird neu berechnet.</p>` +
+        `<table class="uebersicht"><tr><th>Name</th><th>WB-Jahr</th><th>Wunsch</th><th>Stammstation</th><th>Festlegen</th>` +
+        `<th>Auf Station (Tage)</th><th>Aushilfe-Tage</th><th>Nachtdienste</th></tr>${zeilen}</table>`;
+    }
+    function stammSetzen(idx, wert) { aerzte[idx].stamm = wert; berechnen(); }
+
+    function zellInhalt(i, t) {
+      const r = ergebnis, x = r.info[i];
+      const code = x.st[t];
+      const tp = r.tagesplan[t];
+      if (tp && tp.p[i] !== null) {
+        const s = stationen[tp.p[i]];
+        return { text: s.kurz + (code === "N" ? " / N" : "") + (tp.aushilfe[i] ? "*" : ""), station: tp.p[i], aushilfe: tp.aushilfe[i], code: code === "N" ? "N" : null };
+      }
+      if (code) return { text: code === "NF" ? "frei" : code, code };
+      return { text: "", code: null };
+    }
+
+    function planAnzeigen() {
+      const r = ergebnis;
+      const kopf = `<tr><th class="name">Name</th>` + r.alleTage.map(t => {
+        const we = !r.arbeitstage.includes(t);
+        return `<th class="${we ? "we" : ""}">${WOCHENTAGE[wochentag(t)]}<br>${t.slice(8, 10)}.${t.slice(5, 7)}.</th>`;
+      }).join("") + "</tr>";
+      let koerper = "";
+      stationen.forEach((st, s) => {
+        koerper += `<tr class="gruppe"><td class="name" style="background:${STATIONSFARBEN[s % STATIONSFARBEN.length]}">${esc(st.name)}</td><td colspan="${r.alleTage.length}"></td></tr>`;
+        r.info.forEach((x, i) => {
+          if (r.z[i] !== s) return;
+          koerper += `<tr><td class="name">${esc(x.arzt.name)}</td>` + r.alleTage.map(t => {
+            const z = zellInhalt(i, t);
+            const we = !r.arbeitstage.includes(t);
+            let stil = "", klasse = we ? "we" : "";
+            if (z.code && z.station === undefined) klasse = "c-" + z.code;
+            else if (z.station !== undefined) { stil = `background:${STATIONSFARBEN[z.station % STATIONSFARBEN.length]}`; if (z.aushilfe) klasse = "aushilfe"; }
+            return `<td class="${klasse}" style="${stil}">${esc(z.text)}</td>`;
+          }).join("") + "</tr>";
+        });
+      });
+      koerper += `<tr class="gruppe"><td class="name">Besetzung (min/Wunsch)</td><td colspan="${r.alleTage.length}"></td></tr>`;
+      stationen.forEach((st, s) => {
+        koerper += `<tr class="summe"><td class="name">${esc(st.kurz)} (${st.min}/${st.ideal})</td>` + r.alleTage.map(t => {
+          if (!r.tagesplan[t]) return `<td class="we"></td>`;
+          const n = r.tagesplan[t].p.filter(v => v === s).length;
+          return `<td class="${n < st.min ? "luecke" : ""}">${n}</td>`;
+        }).join("") + "</tr>";
+      });
+      el("planwrap").innerHTML = `<table class="plan">${kopf}${koerper}</table>`;
+      el("planwrap").style.display = "";
+      el("legende").innerHTML = "<h3>Plan</h3>" +
+        stationen.map((s, k) => `<span style="background:${STATIONSFARBEN[k % STATIONSFARBEN.length]}">${esc(s.kurz)} = ${esc(s.name)}</span>`).join("") +
+        `<span class="aushilfe">* = tageweise Aushilfe</span><span class="c-N">N = Nachtdienst</span><span class="c-NF">frei nach Nachtdienst</span>` +
+        `<span class="c-U">U = Urlaub</span><span class="c-F">F = Fortbildung</span><span class="c-FA">FA = Freizeitausgleich</span><span class="c-S">S = Sonstiges</span>` +
+        `<span class="luecke">rot = unter Mindestbesetzung</span>`;
+    }
+
+    // ---------- Export ----------
+    async function exportieren() {
+      if (!ergebnis) return;
+      const r = ergebnis;
+      const wb = new ExcelJS.Workbook();
+      const argb = hex => "FF" + hex.replace("#", "").toUpperCase();
+      const fuell = farbe => ({ type: "pattern", pattern: "solid", fgColor: { argb: farbe } });
+      const rahmen = { top: { style: "thin", color: { argb: "FFCCCCCC" } }, left: { style: "thin", color: { argb: "FFCCCCCC" } },
+                       bottom: { style: "thin", color: { argb: "FFCCCCCC" } }, right: { style: "thin", color: { argb: "FFCCCCCC" } } };
+
+      // Blatt Plan
+      const ws = wb.addWorksheet("Plan", { views: [{ state: "frozen", xSplit: 1, ySplit: 2 }] });
+      ws.getCell(1, 1).value = `Stationsplan ${deutsch(r.e.von)} – ${deutsch(r.e.bis)}`;
+      ws.getCell(1, 1).font = { bold: true, size: 13 };
+      ws.getColumn(1).width = 26;
+      const kopf = ws.getRow(2);
+      kopf.getCell(1).value = "Name";
+      r.alleTage.forEach((t, k) => {
+        const c = kopf.getCell(k + 2);
+        c.value = WOCHENTAGE[wochentag(t)] + "\n" + t.slice(8, 10) + "." + t.slice(5, 7) + ".";
+        c.alignment = { wrapText: true, horizontal: "center" };
+        if (!r.arbeitstage.includes(t)) c.fill = fuell("FFEEEEEE");
+        ws.getColumn(k + 2).width = 7;
+      });
+      kopf.font = { bold: true }; kopf.height = 30;
+      let zeile = 3;
+      stationen.forEach((st, s) => {
+        const g = ws.getRow(zeile++);
+        g.getCell(1).value = st.name; g.font = { bold: true };
+        g.getCell(1).fill = fuell(argb(STATIONSFARBEN[s % STATIONSFARBEN.length]));
+        r.info.forEach((x, i) => {
+          if (r.z[i] !== s) return;
+          const row = ws.getRow(zeile++);
+          row.getCell(1).value = x.arzt.name;
+          r.alleTage.forEach((t, k) => {
+            const z = zellInhalt(i, t), c = row.getCell(k + 2);
+            c.value = z.text; c.alignment = { horizontal: "center" }; c.border = rahmen;
+            if (z.station !== undefined) {
+              c.fill = fuell(argb(STATIONSFARBEN[z.station % STATIONSFARBEN.length]));
+              if (z.aushilfe) c.font = { italic: true, bold: true, color: { argb: "FFB00020" } };
+            } else if (z.code) {
+              c.fill = fuell(FARBEN_EXCEL[z.code]);
+              if (z.code === "N") c.font = { color: { argb: "FFFFFFFF" } };
+            } else if (!r.arbeitstage.includes(t)) c.fill = fuell("FFEEEEEE");
+          });
+        });
+      });
+      zeile++;
+      ws.getRow(zeile++).getCell(1).value = "Besetzung (min/Wunsch)";
+      ws.getRow(zeile - 1).font = { bold: true };
+      stationen.forEach((st, s) => {
+        const row = ws.getRow(zeile++);
+        row.getCell(1).value = `${st.kurz} (${st.min}/${st.ideal})`;
+        r.alleTage.forEach((t, k) => {
+          if (!r.tagesplan[t]) return;
+          const n = r.tagesplan[t].p.filter(v => v === s).length;
+          const c = row.getCell(k + 2);
+          c.value = n; c.alignment = { horizontal: "center" }; c.border = rahmen;
+          if (n < st.min) { c.fill = fuell("FFF8C9C9"); c.font = { bold: true }; }
+        });
+      });
+      zeile++;
+      ws.getRow(zeile).getCell(1).value = "* = tageweise Aushilfe, N = Nachtdienst, frei = frei nach Nachtdienst, U = Urlaub, F = Fortbildung, FA = Freizeitausgleich, S = Sonstiges";
+      ws.getRow(zeile).getCell(1).font = { italic: true, color: { argb: "FF555555" } };
+
+      // Blatt Übersicht
+      const wu = wb.addWorksheet("Übersicht");
+      wu.columns = [{ header: "Name", width: 26 }, { header: "WB-Jahr", width: 9 }, { header: "Wunsch", width: 18 },
+                    { header: "Stammstation", width: 18 }, { header: "Auf Station (Tage)", width: 18 },
+                    { header: "Aushilfe-Tage", width: 14 }, { header: "Nachtdienste", width: 13 }];
+      wu.getRow(1).font = { bold: true };
+      r.info.forEach((x, i) => {
+        const c = zaehleArzt(x, i);
+        wu.addRow([x.arzt.name, x.arzt.wbJahr || "", x.arzt.wunsch || "", stationen[r.z[i]].name, c.praesent, c.aushilfen, c.naechte]);
+      });
+
+      // Blatt Probleme
+      const wp = wb.addWorksheet("Probleme");
+      wp.columns = [{ header: "Datum", width: 14 }, { header: "Station", width: 18 }, { header: "Problem", width: 40 }];
+      wp.getRow(1).font = { bold: true };
+      r.luecken.forEach(l => wp.addRow([deutsch(l.tag), l.station, `Unterbesetzung: es fehlen ${l.fehlt}`]));
+      r.ohneErfahrene.forEach(l => wp.addRow([deutsch(l.tag), l.station, "Keine erfahrene Person"]));
+      if (!r.luecken.length && !r.ohneErfahrene.length) wp.addRow(["", "", "Keine Probleme gefunden"]);
+
+      await herunterladen(wb, `Stationsplan_${r.e.von}_bis_${r.e.bis}.xlsx`);
+    }
+
+    // ---------- Start ----------
+    if (typeof ExcelJS === "undefined") {
+      document.body.insertAdjacentHTML("afterbegin",
+        '<p class="fehler"><b>Die Datei lib/exceljs.min.js wurde nicht gefunden.</b> Bitte den Ordner „lib“ zusammen mit dieser Seite ablegen.</p>');
+    }
+    if (!laden()) {
+      const h = new Date(), n = new Date(Date.UTC(h.getFullYear(), h.getMonth() + 1, 1));
+      el("von").value = isoAusDate(n);
+      el("bis").value = isoAusDate(new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 0)));
+    }
+    ["von", "bis", "erfahrenAb", "folgetagFrei", "diensttagFrei", "wochenendeAus", "feiertage"]
+      .forEach(id => el(id).addEventListener("change", speichern));
+    stationenAnzeigen();
+  </script>
+</body>
+</html>
